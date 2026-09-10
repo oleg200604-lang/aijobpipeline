@@ -65,23 +65,8 @@ if (!$job) {
 |--------------------------------------------------------------------------
 */
 
-global $wpdb;
-
-$analyses_table = AIJP_Database::table(
-    'analyses'
-);
-
-$analysis = $wpdb->get_row(
-    $wpdb->prepare(
-        "
-        SELECT *
-        FROM {$analyses_table}
-        WHERE job_id = %d
-        ORDER BY id DESC
-        LIMIT 1
-        ",
-        $job_id
-    )
+$analysis = AIJP_Job_Repository::get_analysis(
+    $job_id
 );
 
 /*
@@ -121,6 +106,101 @@ if (
         $red_flags = $decoded_red_flags;
     }
 }
+
+/*
+|--------------------------------------------------------------------------
+| Proposals (відгуки, Етап 5 ТЗ)
+|--------------------------------------------------------------------------
+*/
+
+$proposal_notice = '';
+$proposal_notice_type = 'success';
+
+if (
+    current_user_can(AIJP_Roles::CAP_EDIT_JOBS) &&
+    isset($_POST['aijp_proposal_action'])
+) {
+    check_admin_referer(
+        'aijp_proposal_action_' . $job_id,
+        'aijp_proposal_action_nonce'
+    );
+
+    $proposal_action = sanitize_key(
+        wp_unslash($_POST['aijp_proposal_action'])
+    );
+
+    if ($proposal_action === 'generate') {
+        $service = new AIJP_Proposal_Service();
+
+        $lang_override = isset($_POST['lang'])
+            ? sanitize_key(wp_unslash($_POST['lang']))
+            : '';
+
+        $generated = $service->generate($job_id, $lang_override);
+
+        if (is_wp_error($generated)) {
+            $proposal_notice = $generated->get_error_message();
+            $proposal_notice_type = 'error';
+        } else {
+            $proposal_notice = __(
+                'Proposal draft generated.',
+                'ai-job-pipeline'
+            );
+        }
+    }
+
+    if ($proposal_action === 'save_edit') {
+        $proposal_id = absint($_POST['proposal_id'] ?? 0);
+
+        $text = sanitize_textarea_field(
+            wp_unslash($_POST['proposal_text'] ?? '')
+        );
+
+        if (
+            $proposal_id > 0 &&
+            AIJP_Proposal_Repository::update_text($proposal_id, $text)
+        ) {
+            $proposal_notice = __(
+                'Proposal draft saved.',
+                'ai-job-pipeline'
+            );
+        } else {
+            $proposal_notice = __(
+                'Could not save the proposal draft.',
+                'ai-job-pipeline'
+            );
+            $proposal_notice_type = 'error';
+        }
+    }
+
+    if ($proposal_action === 'mark_sent') {
+        $proposal_id = absint($_POST['proposal_id'] ?? 0);
+
+        if (
+            $proposal_id > 0 &&
+            AIJP_Proposal_Repository::mark_sent($proposal_id)
+        ) {
+            AIJP_Job_Repository::update_status(
+                $job_id,
+                AIJP_Job_Status::PROPOSAL_SENT
+            );
+
+            $proposal_notice = __(
+                'Proposal marked as sent. Job status updated to "proposal_sent".',
+                'ai-job-pipeline'
+            );
+        } else {
+            $proposal_notice = __(
+                'Could not mark the proposal as sent.',
+                'ai-job-pipeline'
+            );
+            $proposal_notice_type = 'error';
+        }
+    }
+}
+
+$proposals = AIJP_Proposal_Repository::get_all_for_job($job_id);
+$latest_proposal = $proposals[0] ?? null;
 
 /*
 |--------------------------------------------------------------------------
@@ -991,6 +1071,126 @@ switch ($status) {
 
     <?php endif; ?>
 
+
+<?php endif; ?>
+
+
+<hr>
+
+<h2>
+    <?php echo esc_html__('Proposal (відгук)', 'ai-job-pipeline'); ?>
+</h2>
+
+<?php if ($proposal_notice !== '') : ?>
+    <div class="notice notice-<?php echo esc_attr($proposal_notice_type); ?>" style="clear: both;">
+        <p><?php echo esc_html($proposal_notice); ?></p>
+    </div>
+<?php endif; ?>
+
+<?php if (current_user_can(AIJP_Roles::CAP_EDIT_JOBS)) : ?>
+
+    <form method="post" action="" style="margin-bottom: 12px;">
+        <?php wp_nonce_field('aijp_proposal_action_' . $job_id, 'aijp_proposal_action_nonce'); ?>
+        <input type="hidden" name="aijp_proposal_action" value="generate">
+        <input
+            type="text"
+            name="lang"
+            placeholder="<?php echo esc_attr__('Language code (optional, e.g. de)', 'ai-job-pipeline'); ?>"
+            value="<?php echo esc_attr((string) ($job->lang ?? '')); ?>"
+            style="width: 220px;"
+        >
+        <?php submit_button(
+            __('Generate proposal draft (AI)', 'ai-job-pipeline'),
+            'secondary',
+            'submit',
+            false
+        ); ?>
+    </form>
+
+<?php endif; ?>
+
+<?php if ($latest_proposal) : ?>
+
+    <div class="card" style="max-width: 700px;">
+        <p>
+            <strong><?php echo esc_html(strtoupper($latest_proposal->status)); ?></strong>
+            &middot; <?php echo esc_html((string) $latest_proposal->lang); ?>
+            &middot; <?php echo esc_html((string) $latest_proposal->created_at); ?>
+            <?php if ($latest_proposal->status === AIJP_Proposal_Repository::STATUS_SENT) : ?>
+                &middot; <?php echo esc_html__('sent at', 'ai-job-pipeline'); ?> <?php echo esc_html((string) $latest_proposal->sent_at); ?>
+            <?php endif; ?>
+        </p>
+
+        <?php if (
+            $latest_proposal->status !== AIJP_Proposal_Repository::STATUS_SENT &&
+            current_user_can(AIJP_Roles::CAP_EDIT_JOBS)
+        ) : ?>
+
+            <form method="post" action="">
+                <?php wp_nonce_field('aijp_proposal_action_' . $job_id, 'aijp_proposal_action_nonce'); ?>
+                <input type="hidden" name="aijp_proposal_action" value="save_edit">
+                <input type="hidden" name="proposal_id" value="<?php echo esc_attr($latest_proposal->id); ?>">
+                <textarea
+                    name="proposal_text"
+                    rows="8"
+                    class="large-text"
+                ><?php echo esc_textarea((string) $latest_proposal->text); ?></textarea>
+                <p>
+                    <?php submit_button(
+                        __('Save edits', 'ai-job-pipeline'),
+                        'secondary',
+                        'submit',
+                        false
+                    ); ?>
+                </p>
+            </form>
+
+            <form method="post" action="">
+                <?php wp_nonce_field('aijp_proposal_action_' . $job_id, 'aijp_proposal_action_nonce'); ?>
+                <input type="hidden" name="aijp_proposal_action" value="mark_sent">
+                <input type="hidden" name="proposal_id" value="<?php echo esc_attr($latest_proposal->id); ?>">
+                <?php submit_button(
+                    __('Mark as sent', 'ai-job-pipeline'),
+                    'primary',
+                    'submit',
+                    false
+                ); ?>
+                <em style="margin-left: 8px;">
+                    <?php echo esc_html__(
+                        'Sending itself stays manual — this only records that a human sent it.',
+                        'ai-job-pipeline'
+                    ); ?>
+                </em>
+            </form>
+
+        <?php else : ?>
+
+            <p style="white-space: pre-wrap;"><?php echo esc_html((string) $latest_proposal->text); ?></p>
+
+        <?php endif; ?>
+    </div>
+
+<?php else : ?>
+
+    <p><?php echo esc_html__('No proposal drafted yet for this job.', 'ai-job-pipeline'); ?></p>
+
+<?php endif; ?>
+
+<?php if (count($proposals) > 1) : ?>
+
+    <details style="margin-top: 10px;">
+        <summary><?php echo esc_html__('Previous drafts', 'ai-job-pipeline'); ?></summary>
+
+        <?php foreach (array_slice($proposals, 1) as $old_proposal) : ?>
+            <div style="border-top: 1px solid #ccd0d4; padding: 8px 0;">
+                <p>
+                    <strong><?php echo esc_html(strtoupper($old_proposal->status)); ?></strong>
+                    &middot; <?php echo esc_html((string) $old_proposal->created_at); ?>
+                </p>
+                <p style="white-space: pre-wrap;"><?php echo esc_html((string) $old_proposal->text); ?></p>
+            </div>
+        <?php endforeach; ?>
+    </details>
 
 <?php endif; ?>
 

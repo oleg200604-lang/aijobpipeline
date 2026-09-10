@@ -1076,6 +1076,35 @@ class AIJP_Job_Repository
     }
 
     /**
+     * Get the AI analysis for a job, if one exists.
+     *
+     * @param int $job_id Job ID.
+     * @return object|null
+     */
+    public static function get_analysis(int $job_id)
+    {
+        global $wpdb;
+
+        if ($job_id <= 0) {
+            return null;
+        }
+
+        $analyses_table = AIJP_Database::table('analyses');
+
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "
+                SELECT *
+                FROM {$analyses_table}
+                WHERE job_id = %d
+                LIMIT 1
+                ",
+                $job_id
+            )
+        );
+    }
+
+    /**
      * Return job statuses.
      *
      * @return array<string,string>

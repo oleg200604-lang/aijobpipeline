@@ -47,7 +47,7 @@ class AIJP_Database
      *
      * Bumping this version forces maybe_upgrade() to run migrations.
      */
-    public const DB_VERSION = '0.4.0';
+    public const DB_VERSION = '0.5.0';
 
     /**
      * Option storing installed database version.
@@ -149,6 +149,11 @@ class AIJP_Database
         $usage_table =
             self::table(
                 'ai_usage'
+            );
+
+        $proposals_table =
+            self::table(
+                'proposals'
             );
 
         /*
@@ -381,6 +386,52 @@ class AIJP_Database
             ) {$charset_collate};
         ";
 
+        /*
+         * Proposals (відгуки, Етап 5 ТЗ).
+         *
+         * A job may have several proposal drafts over time (e.g. a
+         * regenerated draft after the first one was skipped), so this
+         * is a one-to-many relationship to jobs, unlike analyses which
+         * are one-to-one.
+         */
+        $sql_proposals = \"
+            CREATE TABLE {$proposals_table} (
+                id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+
+                job_id bigint(20) unsigned NOT NULL,
+
+                lang varchar(20) NULL,
+
+                text longtext NULL,
+
+                status varchar(20) NOT NULL DEFAULT 'draft',
+
+                source varchar(20) NOT NULL DEFAULT 'ai',
+
+                provider varchar(100) NULL,
+
+                model varchar(191) NULL,
+
+                prompt_version varchar(100) NULL,
+
+                sent_at datetime NULL,
+
+                client_reply longtext NULL,
+
+                client_replied_at datetime NULL,
+
+                created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                PRIMARY KEY  (id),
+
+                KEY job_id (job_id),
+
+                KEY status (status)
+            ) {$charset_collate};
+        \";
+
         dbDelta(
             $sql_sources
         );
@@ -399,6 +450,10 @@ class AIJP_Database
 
         dbDelta(
             $sql_usage
+        );
+
+        dbDelta(
+            $sql_proposals
         );
 
         /*
